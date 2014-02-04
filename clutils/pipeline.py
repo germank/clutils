@@ -1,12 +1,13 @@
 from pythongrid import KybJob, process_jobs
 import os
-import pickle
+import cPickle as pickle
 import fileinput
 import errno
 import anydbm
 import shelve
 import fnmatch
 import logging
+logging.basicConfig(level=logging.INFO)
 import contextlib
 import time
 
@@ -126,6 +127,27 @@ class ValuePin(OutputPin):
 
     def file_exists(self):
         return os.path.isfile(self.output_filename)
+    
+class DictionaryPin(OutputPin):
+    def __init__(self, module, name, storage='txt'):
+        super(DictionaryPin, self).__init__(module, name)
+        self.storage = storage
+        if self.storage == 'txt':
+            self.output_filename = os.path.join(self.output_path,
+            '{0}.txt'.format(self.name))
+
+    def write(self, data):
+        if self.storage =='txt':
+            with open(self.output_filename, 'w') as f:
+                for k,v in data.iteritems():
+                    f.write('{0}\t{1}\n'.format(k,v))
+
+    def read(self):
+        if self.storage == 'txt':
+            return dict(l.split('\t') for l in file(self.output_path))
+
+    def file_exists(self):
+        return os.path.isfile(self.output_filename)
 
 class ProxyPin(OutputPin):
     def __init__(self, module, name, real_subject):
@@ -228,6 +250,8 @@ class ListPin(Pin):
         for pin in self.pins:
             try: 
                 yield pin.read()
+            except KeyboardInterrupt:
+                raise
             except:
                 logging.exception("Error while reading pin "
                     "{0}".format(pin.get_name()))
@@ -259,6 +283,9 @@ class JobModule(object):
 
     def __str__(self):
         return self.work_path
+    
+    def __repr__(self):
+        return "{0}({1})".format(type(self).__name__,self.work_path)
 
     def __getitem__(self, pin_name):
         return self.pins[pin_name]
@@ -295,6 +322,19 @@ class JobModule(object):
     def finalize(self):
         for pin in self.pins.itervalues():
             pin.finalize()
+
+class CommandLineJob(JobModule):
+    def __init__(self, work_path, command, arguments):
+        super(CommandLineJob, self).__init__(work_path)
+        self.command = command
+        self.arguments = arguments
+    
+    def run(self):
+        from subprocess import Popen, PIPE
+        f = Popen(" ".join([self.command] + self.arguments), stdout=PIPE, shell=True)
+        for line in f.stdout:
+            print line.strip()
+        return f.wait()
 
 class Pipeline(object):
     def __init__(self, work_path):

@@ -12,22 +12,32 @@
 from pythongrid import KybJob, process_jobs
 
 import logging
-import time
+logging.basicConfig(level=logging.INFO)
 import argparse
-import fileinput
 import sys
-import pickle
+import os
+import yaml
+from clutils.pipeline import CommandLineJob, Pipeline
 
 
 def main():
     parser = argparse.ArgumentParser(description=
     '''Runs in parallel the specified command''')
+    parser.add_argument('-n', '--name', default='gridparallel_logs')
+    parser.add_argument('-c', '--config')
+    parser.add_argument('-D', '--debug', action='store_true', default=False)
     parser.add_argument('command', help='command to be runned')
     parser.add_argument('arguments', help='arguments for the command', nargs='*')
 
     args = parser.parse_args()
-
-    execute_command_parallel(args.command, args.arguments)
+    
+    if args.config:
+        config = yaml.load(file(args.config))
+    else:
+        config = {}
+    
+    execute_command_parallel(os.path.join(os.getcwd(),args.name), 
+                             args.command, args.arguments, config, args.debug)
 
 def execute_command(command, arguments, filler):
     from subprocess import Popen, PIPE
@@ -36,10 +46,10 @@ def execute_command(command, arguments, filler):
     #FIXME: does it make any sense to pipe the stdout?
     f = Popen(" ".join([command] + arguments), stdout=PIPE, shell=True)
     for line in f.stdout:
-        print line
+        print line.strip()
     return f.wait()
 
-def make_jobs(command, arguments, fillers):
+def make_jobs(work_path, command, arguments, fillers):
     """
     creates a list of KybJob objects,
     which carry all information needed
@@ -54,11 +64,11 @@ def make_jobs(command, arguments, fillers):
 
     # create job objects
     for filler in fillers:
-        job = KybJob(execute_command, [command, arguments, filler]) 
-        job.h_vmem="2G"
-        job.h_cpu='4:0:0'
-        job.hosts='compute-0-1|compute-0-2|compute-0-3|compute-0-4|compute-0-5'
-        
+        command_filler = command.replace('{}', filler)
+        arguments_filler = [arg.replace('{}', filler) for arg in arguments]
+        modulename = filler
+        job = CommandLineJob(os.path.join(work_path, modulename),
+                             command_filler, arguments_filler) 
         jobs.append(job)
         
 
@@ -67,22 +77,26 @@ def make_jobs(command, arguments, fillers):
 
 
 
-def execute_command_parallel(command, arguments, debug=False):
+def execute_command_parallel(work_path, command, arguments, config, debug):
     """
     run a set of jobs on cluster
     """
 
     fillers = [l.strip() for l in sys.stdin]
 
-    functionJobs = make_jobs(command, arguments, fillers)
-    
-    processedFunctionJobs = process_jobs(functionJobs,local=debug)
+    pl = Pipeline(work_path)    
+    functionJobs = make_jobs(work_path, command, arguments, fillers)
+    pl.add_stage(*functionJobs)
+    pl.run(debug, False, config)
 
-    for job in processedFunctionJobs:
-        with open(job.log_stdout_fn) as f:
-            for l in f:
-                print l
+#    for job in processedFunctionJobs:
+#        with open(job.log_stdout_fn) as f:
+#            for l in f:
+#                print l
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print 'Aborted!'
 
