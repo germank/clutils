@@ -67,7 +67,7 @@ def make_jobs(work_path, command, arguments, fillers):
         command_filler = command.replace('{}', filler)
         arguments_filler = [arg.replace('{}', filler) for arg in arguments]
         modulename = filler
-        job = CommandLineJob(os.path.join(work_path, modulename),
+        job = CommandLineJob(work_path, modulename,
                              command_filler, arguments_filler) 
         jobs.append(job)
         

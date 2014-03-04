@@ -1,352 +1,134 @@
 from pythongrid import KybJob, process_jobs
 import os
-import cPickle as pickle
-import fileinput
-import errno
-import anydbm
-import shelve
 import fnmatch
 import logging
-logging.basicConfig(level=logging.INFO)
+from aux import mkdir_p, dict_merge, dict_flatten
 import contextlib
 import time
-
-#auxiliary functions
-def mkdir_p(path):
-    try:
-        os.makedirs(path)
-    except OSError as exc: # Python >2.5
-        if exc.errno == errno.EEXIST and os.path.isdir(path):
-            pass
-        else: raise
-
-def gziplines(fname):
-    from subprocess import Popen, PIPE
-    f = Popen(['zcat' ] + [fname], stdout=PIPE)
-    for line in f.stdout:
-        yield line
-
-def dict_merge(a, b):
-    '''recursively merges dict's. not just simple a['key'] = b['key'], if
-    both a and have a key who's value is a dict then dict_merge is called
-    on both values and the result stored in the returned dictionary. 
-    If, on the contrary, they share a key, but the value is not a dict, then
-    dict a values are preferred'''
-    if not isinstance(b, dict):
-        return b
-    result = b
-    for k, v in a.iteritems():
-        if k in result and isinstance(result[k], dict):
-                result[k] = dict_merge(v, result[k])
-        else:
-            result[k] = v
-    return result
-import collections
-
-from collections import *
-from itertools import *
-
-same = lambda x:x  # identity function
-add = lambda a,b:a+b
-_tuple = lambda x:(x,)  # python actually has coercion, avoid it like so
-
-def dict_flatten(dictionary, keyReducer=add, keyLift=_tuple, init=()):
-
-    # semi-lazy: goes through all dicts but lazy over all keys
-    # reduction is done in a fold-left manner, i.e. final key will be
-    #     r((...r((r((r((init,k1)),k2)),k3))...kn))
-
-    def _flattenIter(pairs, _keyAccum=init):
-        atoms = ((k,v) for k,v in pairs if not isinstance(v, Mapping))
-        submaps = ((k,v) for k,v in pairs if isinstance(v, Mapping))
-        def compress(k):
-            return keyReducer(_keyAccum, keyLift(k))
-        return chain(
-            (
-                (compress(k),v) for k,v in atoms
-            ),
-            *[
-                _flattenIter(submap.items(), compress(k))
-                for k,submap in submaps
-            ]
-        )
-    return dict(_flattenIter(dictionary.items()))
+from clutils.pins import PinMultiplex
+from abc import abstractmethod
 
 
-class Pin(object):
-    def __init__(self, module, name):
-        super(Pin, self).__init__()
-        self.name = name
-        self.module = module
-        self.source = None
-
-    def get_name(self):
-        return self.name
-
-    def put_source(self, ot):
-        self.source = ot
-    
-    def connect_to(self, ot):
-        ot.put_source(self)
-
-    def read(self):
-        if self.source:
-            return self.source.read()
-
-    def dispose(self):
-        '''Destroy the intermediate values of the pin'''
-        #FIXME: some reference counting mechanism might be required
-        pass
-    
-    def open(self):
-        pass
-
-    def close(self):
-        pass
-
-    def finalize(self):
-        pass
-
-class OutputPin(Pin):
-    def __init__(self, module, name):
-        super(OutputPin, self).__init__(module, name)
-        self.output_path = os.path.join(module.get_work_path(), name)
-        mkdir_p(self.output_path)
-
-class ValuePin(OutputPin):
-    def __init__(self, module, name):
-        super(ValuePin, self).__init__(module, name)
-        self.output_filename = os.path.join(self.output_path,
-            '{0}.pkl'.format(self.name))
-
-    def write(self, data):
-        pickle.dump(data, file(self.output_filename, 'w'))
-
-    def read(self):
-        return pickle.load(file(self.output_filename))
-
-    def file_exists(self):
-        return os.path.isfile(self.output_filename)
-    
-class DictionaryPin(OutputPin):
-    def __init__(self, module, name, storage='txt'):
-        super(DictionaryPin, self).__init__(module, name)
-        self.storage = storage
-        if self.storage == 'txt':
-            self.output_filename = os.path.join(self.output_path,
-            '{0}.txt'.format(self.name))
-
-    def write(self, data):
-        if self.storage =='txt':
-            with open(self.output_filename, 'w') as f:
-                for k,v in data.iteritems():
-                    f.write('{0}\t{1}\n'.format(k,v))
-
-    def read(self):
-        if self.storage == 'txt':
-            return dict(l.split('\t') for l in file(self.output_path))
-
-    def file_exists(self):
-        return os.path.isfile(self.output_filename)
-
-class ProxyPin(OutputPin):
-    def __init__(self, module, name, real_subject):
-        super(ProxyPin, self).__init__(module, name)
-        self.real_subject = real_subject
-
-    def __getattr__(self, k):
-        if k == '__setstate__':
-            return getattr(super(OutputPin, self), k)
-        return getattr(self.real_subject, k)
-
-    def open(self):
-        self.real_subject.open()
-
-    def close(self):
-        self.real_subject.close()
-
-    def __len__(self):
-        return len(self.real_subject)
-
-
-class ShelvePin(OutputPin):
-    def __init__(self, module, name):
-        super(ShelvePin, self).__init__(module, name)
-        self.output = None
-        self.output_filename = os.path.join(self.output_path,
-            '{0}').format(self.name)
-    
-    def lazy_init(self):
-        if self.output is None:
-            self.output = shelve.open(self.output_filename)
-    
-    def __getitem__(self, k):
-        self.lazy_init()
-        return self.output[k]
-        
-    def __setitem__(self, k, v):
-        self.lazy_init()
-        self.output[k] = v
-
-    def write(self, data_dict):
-        self.lazy_init()
-        self.output.update(data_dict)
-
-    def read(self):
-        self.lazy_init()
-        return self.output
-
-class DBMPin(OutputPin):
-    def __init__(self, module, name, value_type=None):
-        super(DBMPin, self).__init__(module, name)
-        self.value_type = value_type
-        self.output = None
-        self.output_filename = os.path.join(self.output_path,
-            '{0}').format(self.name)
-
-    def lazy_init(self):
-        if not self.output:
-            self.output = anydbm.open(self.output_filename, 'c')
-    
-    def __getitem__(self, k):
-        self.lazy_init()
-        if self.value_type:
-            return self.value_type(self.output[k])
-        else:
-            return self.output[k]
-        
-    def __setitem__(self, k, v):
-        self.lazy_init()
-        if self.value_type:
-            self.output[k] = str(v)
-        else:
-            self.output[k] = v
-
-    def write(self, data_dict):
-        self.lazy_init()
-        self.output.update(data_dict)
-
-    def read(self):
-        self.lazy_init()
-        return self.output
-
-class ListPin(Pin):
-    def __init__(self, module, name):
-        super(ListPin, self).__init__(module, name)
-        self.pins=[]
-
-    def __iter__(self):
-        #FIXME: iterate over pins and let the user read it herself!
-        #that way she can dispose unused pins afterwards
-        return iter(self.read())
-
-    def put_source(self, pin):
-        self.append(pin)
-
-    def append(self, pin):
-        self.pins.append(pin)
-
-    def read(self):
-        for pin in self.pins:
-            try: 
-                yield pin.read()
-            except KeyboardInterrupt:
-                raise
-            except:
-                logging.exception("Error while reading pin "
-                    "{0}".format(pin.get_name()))
-
-        
-
-class TextFilePin(Pin):
-    def __init__(self, module, name, filename, gzip=False):
-        super(TextFilePin, self).__init__(module, name)
-        self.filename = filename
-        self.gzip = gzip
-
-    def read(self):
-        if self.gzip:
-            return gziplines(self.filename)
-        else:
-            return fileinput.FileInput(self.filename)
-
-        
-
-class JobModule(object):
-    def __init__(self, work_path, pins = None):
-        super(JobModule, self).__init__()
-        self.work_path = work_path
-        mkdir_p(self.work_path)
+class BaseModule(object):
+    def __init__(self, pins = None):
         if not pins:
             pins = {}
         self.pins = pins
+        try:
+            self.setup()
+        except AttributeError, e:
+            if 'setup' in e.message:
+                raise RuntimeError("You must define a setup method to initalize the "
+                               "pins in class {0}".format(self.__class__))
+            else:
+                raise
+    
+    @abstractmethod
+    def setup(self):
+        """Override this method to register the module Pins"""
+        pass
+            
+        
+    def __getitem__(self, pin_name):
+        return self.pins[pin_name]
+    
+    def register_pins(self, *pins):
+        for pin in pins:
+            self.pins[pin.get_name()] = pin
+    
+    def close_pins(self, *args):
+        for pin in self.pins.itervalues():
+            pin.close()
+    
+    def initialize(self, work_path):
+        for pin in self.pins.itervalues():
+            pin.initialize(work_path)
+            
 
+class JobModule(BaseModule):
+    def __init__(self, *name):
+        '''
+        Args:
+            name: A string or a list of strings that will be joined with the 
+                parent_work_path to create the working path of the job
+            args: Every other argument is directly passed to the run function
+                WARNING: every argument should be serializable
+        '''
+        
+        self.args = []
+        self.name = name
+        super(JobModule, self).__init__()
+
+    def initialize(self, work_path):
+        '''
+            work_path: A path in which to create the relevant directories
+                for this module.
+        '''
+        if isinstance(self.name, basestring):
+            self.work_path = os.path.join(work_path, self.name)
+        else:
+            #assume the name is a iterable list of names
+            self.work_path = os.path.join(work_path, os.path.join(*self.name))
+        mkdir_p(self.work_path)
+        super(JobModule, self).initialize(self.work_path)
+        logging.info("Job Initialized at {0}".format(self.work_path))
+                
+    def set_args(self, *args):
+        self.args = args
+    
+    @abstractmethod
+    def run(self, *args, **kwargs):
+        """Override to define the code that will be executed by the job"""
+        pass
+    
     def __str__(self):
         return self.work_path
     
     def __repr__(self):
         return "{0}({1})".format(type(self).__name__,self.work_path)
 
-    def __getitem__(self, pin_name):
-        return self.pins[pin_name]
-
     def get_work_path(self):
         return self.work_path
-
-    def setup(self, *pins):
-        for pin in pins:
-            self.pins[pin.get_name()] = pin
-
-    def open_pins(self):
-        for pin in self.pins.itervalues():
-            pin.open()
-
-    def close_pins(self, *args):
-        for pin in self.pins.itervalues():
-            pin.close()
-
-    def run(self):
-        '''
-        Main loop of the job. To be overriden on inheriting classes
-        '''
-        pass
 
     def finished(self):
         '''
         If the pipeline is run with the resume option, this function is called
         to ask if the module needs to be runned. If it returns True, then the
         module won't be run again
+        
+        Override to specify different semantics 
         '''
-        pass
+        for pin in self.pins.itervalues():
+            if not pin.file_exists():
+                return False
+        return True
 
     def finalize(self):
         for pin in self.pins.itervalues():
             pin.finalize()
 
-class CommandLineJob(JobModule):
-    def __init__(self, work_path, command, arguments):
-        super(CommandLineJob, self).__init__(work_path)
-        self.command = command
-        self.arguments = arguments
-    
-    def run(self):
-        from subprocess import Popen, PIPE
-        f = Popen(" ".join([self.command] + self.arguments), stdout=PIPE, shell=True)
-        for line in f.stdout:
-            print line.strip()
-        return f.wait()
 
-class Pipeline(object):
+class Pipeline(BaseModule):
     def __init__(self, work_path):
-        super(Pipeline, self).__init__()
         mkdir_p(work_path)
         self.stages = []
+        self.add_stage()
         self.ctx_mgrs = []
         self.work_path = work_path
-
+        super(Pipeline, self).__init__()
+    
+    def setup(self):
+        self.register_pins(PinMultiplex("output"))
+        
     def add_stage(self, *modules):
-        logging.info("{0} modules loaded".format(len(modules)))
-        self.stages.append(modules)
+        '''creates a stage, which is a set of modules
+        executed concurrently. Stages, on the other hand, 
+         are executed consecutively'''
+        self.stages.append(list(modules))
+    
+    def add_module(self, module):
+        '''adds a module to the current stage'''
+        self.stages[-1].append(module)
 
     def add_context_mgr(self, ctx_mgr):
         self.ctx_mgrs.append(ctx_mgr)
@@ -378,26 +160,56 @@ class Pipeline(object):
                         setattr(job, k, v)
 
     def run(self, debug=False, resume=False, config=None, pythonpathdir=None):
+        #Initialize modules
+        for stage in self.stages:
+                for module in stage:
+                    module.initialize(self.work_path)
+        logging.debug("Initialization Finished")
         #default configuration
-        default_config = {'*': {'h_cpu': '24:0:0', 'h_vmem': '7900M'}}
+        default_config = {'*': {'h_cpu': '1:0:0', 'h_vmem': '1G'}}
         if not config:
+            logging.debug("Using default configuration")
             config = default_config
         else:
             if not isinstance(config, dict):
                 raise TypeError('config is given as a dictionary')
             if all(isinstance(v, basestring) for v in config.values()):
+                logging.debug("Using same configuration for all modules")
                 config = {'*': config}
             config = dict_merge(config, default_config)
+            logging.debug("Merged user-provided configuration: {0}".format(config))
+        #By default, if no path is given, it adds to the python path
+        #the directory where the module was defined
         if not pythonpathdir:
             import inspect
-            pythonpathdir = os.path.dirname(os.path.abspath(inspect.getfile(type(self))))
-            
+            pythonpathdirs = set()
+            #Add to the pythonpath the directory where the pipeline is defined  
+            pythonpathdirs.add(os.path.dirname(os.path.abspath(
+                                                inspect.getfile(type(self)))))
+            for stage in self.stages:
+                for module in stage:
+                    #Add to the pythonpath the directory where each module
+                    #is defined
+                    pythonpathdirs.add(os.path.dirname(os.path.abspath(
+                                                inspect.getfile(type(module)))))
+                    for arg in module.args:
+                        try:
+                            #Add to the pythonpath the directory where each argument
+                            #is defined
+                            pythonpathdirs.add(os.path.dirname(
+                                        os.path.abspath(inspect.getfile(arg))))
+                        except TypeError:
+                            pass
+            pythonpathdir = ":".join(pythonpathdirs)
+            logging.debug("Adding potential useful paths to the pythonpath: {0}"
+                          .format(pythonpathdir))
+
         with contextlib.nested(*self.ctx_mgrs):
             if debug:
                 #give time for context managers to initialize
                 #(for kyototycoon debugging)
                 time.sleep(1)
-            for i_stage, stage in enumerate(self.stages):
+            for stage in self.stages:
                 jobs = []
                 for module in stage:
                     if not resume or not module.finished():
@@ -411,12 +223,17 @@ class Pipeline(object):
                 process_jobs(jobs, local=debug)
                 for module in stage:
                     module.finalize()
+                    
 
 def run_clmodule(module):
-    logging.info("{0}: openinig pins".format(module))
-    module.open_pins()
     logging.info("{0}: running".format(module))
-    module.run()
+    try:
+        module.run(*module.args)
+    except AttributeError, e:
+        if 'run' in e.message:
+            raise RuntimeError("You must define the run method in the JobModule "
+                           "instance.")
+        else: raise
     logging.info("{0}: closing pins".format(module))
     module.close_pins()
     logging.info("{0}: finalizing".format(module))

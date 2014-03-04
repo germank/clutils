@@ -1,3 +1,3 @@
-from pipeline import *
-from config_loader import *
-all = ['JobModule', 'TextPin', 'ListPin', 'ValuePin', 'Pipeline', 'DBMPin']
+from pipeline import Pipeline, JobModule
+from pins import TextFilePin, PinMultiplex, ScalarPin, DictionaryPin
+from config_loader import nodenames
