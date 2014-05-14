@@ -12,7 +12,7 @@ def main():
     #In real cases, don't use the default config!
     p.run(debug=False, resume=False, config=None)
     
-    print "Sum:",  p['output'].read().next()
+    print "Sum:",  list(p['output'].read())[0]
 
     
 if __name__ == '__main__':

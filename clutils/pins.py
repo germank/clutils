@@ -94,12 +94,15 @@ class ScalarPin(OutputPin):
     def initialize(self, work_path):
         super(ScalarPin, self).initialize(work_path)
         self.serializer = self.serializer_type(os.path.join(self.output_path,
-            '{0}.pkl'.format(self.name)))
+            self.name))
 
     def write(self, data):
         self.serializer.save_scalar(data)
 
     def read(self):
+        v = super(ScalarPin, self).read()
+        if v:
+            return v
         return self.serializer.read()
 
     def file_exists(self):

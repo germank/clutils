@@ -7,6 +7,8 @@ import os
 def main():
     arg_parser = argparse.ArgumentParser(description='Count words in target')
     arg_parser.add_argument('corpora', nargs='+')
+    arg_parser.add_argument('--to-lower', description='Converts all words to '
+        'lowercase', action='store_true', default=False)
     arg_parser.add_argument('-z', '--zipped', default=False, action='store_true')
     arg_parser.add_argument('-o', '--output', required=True)
     
@@ -24,7 +26,7 @@ def main():
         # sub-directory
         count_module = CountWords("count", os.path.basename(corpus))
         #Set the arguments that will be sent to the "run" method
-        count_module.set_args(corpus, args.zipped)
+        count_module.set_args(corpus, args.zipped, args.to_lower)
         #Connect the output of the count_module to the input of the summing module
         count_module['output'].connect_to(sum_module['input'])
         #Add the count_module

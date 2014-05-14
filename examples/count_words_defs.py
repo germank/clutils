@@ -11,13 +11,15 @@ class CountWords(JobModule):
         #It outputs into a dictionary (A ScalarPin would have done just as fine)
                            DictionaryPin("output", Counter))
     
-    def run(self, filename, zipped):
+    def run(self, filename, zipped, to_lower):
         #We need to open the TextFilePin
         self['input'].open(filename, zipped)
         #We can read from it as if it were just any file
         for l in self['input'].read():
             if not l.startswith('<'):
                 word = l.rstrip().split('\t')[0]
+                if to_lower:
+                    word = word.lower()
                 #Counts are directly stored into the output pin 
                 #(It will get after exiting the procedure)
                 self['output'][word] += 1

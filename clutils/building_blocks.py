@@ -26,27 +26,27 @@ class CommandLineJob(JobModule):
             print line.strip()
         return f.wait()
     
-def create_parallel_pipeline(work_path, f, args):
+def create_parallel_pipeline(work_path, f, args_list):
     '''Run a function f with many arguments in parallel'''
     p = Pipeline(work_path)
     p.register_pins(PinMultiplex("output"))
-    for i, arg in enumerate(args):
+    for i, args in enumerate(args_list):
         job = SimpleJob(str(i))
-        job.set_args(f, [arg])
+        job.set_args(f, args)
         job['output'].connect_to(p['output'])
         p.add_module(job)
     return p
 
 
-def create_map_reduce_pipeline(work_path, m, r, args):
+def create_map_reduce_pipeline(work_path, m, r, args_list):
     '''Run a function f with many arguments in parallel'''
     p = Pipeline(work_path)
     reduce_job = MergeJob("reduce")
     reduce_job.set_args(r, [])
     reduce_job['output'].connect_to(p['output'])
-    for i, arg in enumerate(args):
+    for i, args in enumerate(args_list):
         map_job = SimpleJob("map", str(i))
-        map_job.set_args(m, [arg])
+        map_job.set_args(m, args)
         map_job['output'].connect_to(reduce_job['input'])
         p.add_module(map_job)
     p.add_stage()

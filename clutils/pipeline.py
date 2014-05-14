@@ -112,7 +112,6 @@ class Pipeline(BaseModule):
     def __init__(self, work_path):
         mkdir_p(work_path)
         self.stages = []
-        self.add_stage()
         self.ctx_mgrs = []
         self.work_path = work_path
         super(Pipeline, self).__init__()
@@ -128,6 +127,8 @@ class Pipeline(BaseModule):
     
     def add_module(self, module):
         '''adds a module to the current stage'''
+        if not self.stages:
+            self.add_stage()
         self.stages[-1].append(module)
 
     def add_context_mgr(self, ctx_mgr):
@@ -159,7 +160,8 @@ class Pipeline(BaseModule):
                     if v is not None:
                         setattr(job, k, v)
 
-    def run(self, debug=False, resume=False, config=None, pythonpathdir=None):
+    def run(self, debug=False, resume=False, config=None, pythonpathdir=None,
+        init_stage=0):
         #Initialize modules
         for stage in self.stages:
                 for module in stage:
@@ -209,7 +211,9 @@ class Pipeline(BaseModule):
                 #give time for context managers to initialize
                 #(for kyototycoon debugging)
                 time.sleep(1)
-            for stage in self.stages:
+            for i_stage, stage in enumerate(self.stages):
+                if i_stage < init_stage:
+                    continue
                 jobs = []
                 for module in stage:
                     if not resume or not module.finished():
