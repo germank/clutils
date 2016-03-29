@@ -5,7 +5,7 @@ import os
 from factorial_defs import factorial, multiarg_sum
 
 def main():
-    args = [10,100,1000]
+    args = [[10],[100],[1000]]
     #IMPORTANT: the working path must be in a shared directory
     p = create_map_reduce_pipeline(os.path.expanduser('~/tmp/factorial'), 
                                  factorial, multiarg_sum, args)
